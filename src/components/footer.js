@@ -9,17 +9,19 @@ function VanShaktiLogo() {
 }
 
 const quickLinks = [
-  { label: "Home", href: "/" },
-  { label: "About us", href: "/about" },
-  { label: "Products", href: "/products" },
-  { label: "Sustainability", href: "/sustainability" },
+  { label: "Prepaid Recharge", href: "/" },
+  { label: "Electricity", href: "/electricity" },
+  { label: "DTH Recharge", href: "/products" },
+  { label: "Broadband", href: "/sustainability" },
+  { label: "View all ", href: "#" },
 ];
 
 const navigationLinks = [
-  { label: "Contact us", href: "/contact" },
-  { label: "Terms of use", href: "/terms" },
+  
+  { label: "Support", href: "/support" },
   { label: "Privacy Policy", href: "/privacy" },
-  { label: "Blogs", href: "/blogs" },
+  { label: "Terms & Conditions", href: "/terms-conditions" },
+  { label: "Refund Policy", href: "/refund" },
 ];
 
 const socialLinks = [
@@ -53,20 +55,37 @@ export default function Footer() {
           {/* Brand Column */}
           <div className="flex flex-col gap-4">
             <VanShaktiLogo />
-            <p className="text-gray-500 text-sm leading-relaxed" style={{ maxWidth: "260px" }}>
-             UtilityMitra brings together multiple utility services on one platform, making recharges and bill payments simple, fast, and hassle-free.
+
+
+            <p
+              className="text-gray-500"
+              style={{
+                width: "340px",
+                height: "63px",
+                fontFamily: "'Poppins', sans-serif",
+                fontStyle: "normal",
+                fontWeight: 400,
+                fontSize: "14px",
+                lineHeight: "21px", // 150% of 14px
+                display: "flex",
+                alignItems: "center",
+                color: "#808080",
+                margin: 0,
+              }}
+            >
+              UtilityMitra brings together multiple utility services on one platform, making recharges and bill payments simple, fast, and hassle-free.
             </p>
-            <a
+            {/* <a
               href="mailto:support@payplex.in"
               className="text-gray-500 text-sm hover:text-[#1A6B3A] transition-colors duration-200"
             >
               support@payplex.in
-            </a>
+            </a> */}
           </div>
 
           {/* Quick Links Column */}
           <div>
-            <h3 className="text-gray-900 font-semibold text-sm mb-4">Quick links</h3>
+            <h3 className="text-gray-900 font-semibold text-sm mb-4">Services</h3>
             <ul className="flex flex-col gap-3">
               {quickLinks.map((link) => (
                 <li key={link.href}>
@@ -78,9 +97,11 @@ export default function Footer() {
             </ul>
           </div>
 
+
+
           {/* Navigation Column */}
           <div>
-            <h3 className="text-gray-900 font-semibold text-sm mb-4">Navigation</h3>
+            <h3 className="text-gray-900 font-semibold text-sm mb-4">Others links</h3>
             <ul className="flex flex-col gap-3">
               {navigationLinks.map((link) => (
                 <li key={link.href}>
@@ -93,8 +114,8 @@ export default function Footer() {
           </div>
 
           {/* Social Handle Column */}
-          <div>
-            <h3 className="text-gray-900 font-semibold text-sm mb-4">Social Handle</h3>
+          {/* <div>
+            <h3 className="text-gray-900 font-semibold text-sm mb-4">Contact us</h3>
             <ul className="flex flex-col gap-3">
               {socialLinks.map((link) => (
                 <li key={link.href}>
@@ -109,7 +130,25 @@ export default function Footer() {
                 </li>
               ))}
             </ul>
-          </div>
+          </div> */}
+<div>
+  <h3 className="text-gray-900 font-semibold text-sm mb-4">Contact us</h3>
+  <p className="text-gray-500 text-sm">
+    UtilityMitra Technologies Pvt. Ltd.<br />
+    2nd Floor, Shree Tower,<br />
+    Main Road, Harmu Chowk,<br />
+    Ranchi, Jharkhand – 834002, India
+  </p>
+  <p className="text-gray-500 text-sm mt-2">
+    +91 85296337410<br />
+    support@utility.com
+  </p>
+  <hr className="my-2 border-gray-300" />
+  <p className="text-gray-400 text-xs mt-1">
+    CIN: U72900JH2025PTC012345
+  </p>
+</div>
+
         </div>
 
         {/* Bottom Bar */}

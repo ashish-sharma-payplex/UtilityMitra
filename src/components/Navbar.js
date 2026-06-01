@@ -18,6 +18,8 @@ const NAV_ITEMS = [
       { label: "DTH Recharge", href: "#" },
       { label: "Credit Card Bill", href: "#" },
       { label: "Gas Bill", href: "#" },
+
+    
     ],
   },
   {
@@ -201,6 +203,7 @@ const Logo = () => (
     />
   </Link>
 );
+
 
 // ── User Button (logged in state) ─────────────────────────────────────────────
 const UserButton = ({ name, onLogout }) => {
@@ -517,7 +520,7 @@ export default function Navbar() {
         loading={loading}
         error={error}
       /> */}
-
+      
       <nav
         ref={navRef}
         style={{
