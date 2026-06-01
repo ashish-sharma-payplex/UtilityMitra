@@ -1,0 +1,1202 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useRouter } from "next/router";
+import { useBillValidation } from "@/src/hooks/useBillValidation";
+import { useFetchBill } from "@/src/hooks/useFetchBill";
+import { usePayBill } from "@/src/hooks/usePayBill";
+import { useGetBbpsBillers } from "@/src/hooks/useGetBbpsBillers";
+import { useGetBbpsServices } from "@/src/hooks/useGetServices";
+import ServiceUnavailableOverlay from "./Serviceunbelievableoverlay";
+
+// ─── service image map ────────────────────────────────────────────────────────
+const serviceImageMap = {
+  "education-fees": "/utility/educationfees.svg",
+  electricity: "/utility/ElectricBill.svg",
+  "loan-repayment": "/utility/loanrepayment.svg",
+  gas: "/utility/gas-pipe.svg",
+  water: "/utility/water.svg",
+  "mobile-postpaid": "/utility/postpaid.svg",
+  "housing-society": "/utility/housing.svg",
+  "broadband-postpaid": "/utility/broadband.svg",
+  insurance: "/utility/insurance.svg",
+  "landline-postpaid": "/utility/device-landline-phone.svg",
+  fastag: "/utility/fastag.svg",
+  "cable-tv": "/utility/postpaid.svg",
+  "municipal-taxes": "/utility/muncipal.svg",
+  "life-insurance": "/utility/lifeinsurance.svg",
+  dth: "/utility/DTHrecharge.svg",
+  "credit-card": "/utility/cards.svg",
+  "hospital-and-pathology": "/utility/pathology.svg",
+  "municipal-services": "/utility/muncipal.svg",
+  "lpg-gas": "/utility/LPG.svg",
+  "clubs-and-associations": "/utility/club&association.svg",
+  subscription: "/utility/subcription.svg",
+  "health-insurance": "/utility/healthinsurance.svg",
+  "mobile-prepaid": "/utility/recharge.svg",
+  "recurring-deposit": "/utility/recharge.svg",
+  hospital: "/utility/hospital.svg",
+  rental: "/utility/rental.svg",
+  b2b: "/utility/b2b.svg",
+  "metro-recharge": "/utility/train-front.svg",
+  "ncmc-recharge": "/utility/recharge.svg",
+  donation: "/utility/donation.svg",
+  "national-pension-system": "/utility/recharge.svg",
+  "prepaid-meter": "/utility/prepaid.svg",
+  "agent-collection": "/utility/agentcollection.svg",
+  echallan: "/utility/eChallan.svg",
+  "ev-recharge": "/utility/EVrecharge.svg",
+};
+
+// ─── static nav items ─────────────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { label: "Prepaid / Postpaid", slug: "mobile-prepaid" },
+  { label: "Electricity", slug: "electricity" },
+  { label: "DTH", slug: "dth" },
+  { label: "Metro", slug: "metro-recharge" },
+  { label: "Broadband", slug: "broadband-postpaid" },
+  { label: "Education", slug: "education-fees" },
+  { label: "Pay Loan", slug: "loan-repayment" },
+  { label: "FASTag", slug: "fastag" },
+];
+
+const MOBILE_VISIBLE = 3;
+const DESKTOP_VISIBLE = 8;
+const BILLER_LIMIT = 100;
+
+// ─── flow helpers ─────────────────────────────────────────────────────────────
+function isDirectPayWithValidation(biller) {
+  if (!biller) return false;
+  return (
+    biller.fetch_requirement === "NOT_SUPPORTED" &&
+    (biller.validation_requirement === "MANDATORY" ||
+      biller.validation_requirement === "OPTIONAL")
+  );
+}
+function isFetchAndPay(biller) {
+  if (!biller) return false;
+  return biller.fetch_requirement === "MANDATORY";
+}
+function shouldShowAmountField(biller) {
+  if (!biller) return false;
+  return (
+    biller.fetch_requirement === "NOT_SUPPORTED" &&
+    (biller.validation_requirement === "MANDATORY" ||
+      biller.validation_requirement === "OPTIONAL")
+  );
+}
+
+function isMobileParam(paramName) {
+  const lower = (paramName ?? "").toLowerCase().replace(/[\s_\-]/g, "");
+  return (
+    lower.includes("mobile") ||
+    lower.includes("phone") ||
+    lower.includes("contact")
+  );
+}
+
+// ─── field validation ─────────────────────────────────────────────────────────
+function isEmailParam(paramName) {
+  const lower = (paramName ?? "").toLowerCase().replace(/[\s_\-]/g, "");
+  return lower.includes("email") || lower.includes("mail");
+}
+
+function validateField(value, param) {
+  const { optional, min_length, max_length, regex, data_type, name } = param;
+  const v = (value ?? "").trim();
+
+  if (v === "") {
+    if (optional) return null;
+    return `${name} is required`;
+  }
+
+  // ✅ Email param detect hote hi proper validation
+  if (isEmailParam(name)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v))
+      return `Enter a valid email address`;
+    return null; // ✅ baaki checks skip — min/max/regex email pe irrelevant
+  }
+
+  if (data_type === "NUMERIC" && !/^\d+$/.test(v))
+    return `${name} must contain numbers only`;
+  if (data_type === "ALPHABETIC" && !/^[a-zA-Z\s]+$/.test(v))
+    return `${name} must contain letters only`;
+  const min = parseInt(min_length, 10);
+  const max = parseInt(max_length, 10);
+  if (!isNaN(min) && v.length < min)
+    return `${name} must be at least ${min} characters`;
+  if (!isNaN(max) && v.length > max)
+    return `${name} must be at most ${max} characters`;
+  if (regex && regex.trim() !== "") {
+    try {
+      if (!new RegExp(regex).test(v)) return `Invalid format for ${name}`;
+    } catch { /* bad regex — skip */ }
+  }
+  return null;
+}
+
+const AMOUNT_PARAM = {
+  name: "Amount",
+  data_type: "NUMERIC",
+  min_length: "1",
+  max_length: "10",
+  regex: "^[0-9]+$",
+};
+
+// ─── small UI pieces ──────────────────────────────────────────────────────────
+const Shimmer = ({ w = "100%", h = 44, r = 10 }) => (
+  <div style={{
+    width: w, height: h, borderRadius: r,
+    background: "linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%)",
+    backgroundSize: "200% 100%", animation: "bp-shimmer 1.4s infinite",
+  }} />
+);
+
+const ChevronIcon = ({ open }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+    style={{ transition: "transform 0.22s", transform: open ? "rotate(180deg)" : "rotate(0deg)", flexShrink: 0 }}>
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1A914B"
+    strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+const SearchIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9aa0ab"
+    strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+);
+
+// ─── MoreDropdown ─────────────────────────────────────────────────────────────
+function MoreDropdown({ isOpen, onClose, currentSlug, pinnedSlugs, visibleRows }) {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+  const ROW_H = 56;
+  const { data: allServices, loading: servicesLoading } = useGetBbpsServices();
+
+  useEffect(() => {
+    if (!isOpen) { setQuery(""); return; }
+    const h = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    setTimeout(() => inputRef.current?.focus(), 40);
+    return () => document.removeEventListener("keydown", h);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const pinnedSet = new Set(pinnedSlugs);
+  const moreServices = (allServices ?? []).filter((s) => s.status === "ACTIVE" && !pinnedSet.has(s.slug));
+  const filtered = query.trim()
+    ? moreServices.filter((s) => s.name.toLowerCase().includes(query.toLowerCase()))
+    : moreServices;
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 9997 }} />
+      <div style={{
+        position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 9998,
+        background: "#fff", borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+        border: "1px solid #eef0f3", minWidth: 240, overflow: "hidden",
+        animation: "dd-open 0.18s cubic-bezier(0.34,1.1,0.64,1)", transformOrigin: "top right",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid #f0f2f5", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+          <SearchIcon />
+          <input ref={inputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search services..."
+            style={{ border: "none", outline: "none", flex: 1, fontFamily: "'Montserrat',sans-serif", fontSize: 13, fontWeight: 500, color: "#0d1b2a", background: "transparent" }} />
+          {query && <button onClick={() => setQuery("")} style={{ border: "none", background: "none", cursor: "pointer", color: "#9aa0ab", fontSize: 12, padding: 0, lineHeight: 1 }}>✕</button>}
+        </div>
+        <div style={{ maxHeight: visibleRows * ROW_H, overflowY: "auto", overflowX: "hidden", scrollbarWidth: "thin", scrollbarColor: "#e0e0e0 transparent" }}>
+          {servicesLoading ? (
+            <div style={{ padding: "16px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <Shimmer w={34} h={34} r={9} /><Shimmer w="60%" h={14} r={5} />
+                </div>
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ padding: "20px 16px", textAlign: "center", fontSize: 12, color: "#9aa0ab", fontFamily: "'Montserrat',sans-serif" }}>No services found</div>
+          ) : (
+            filtered.map((item) => {
+              const isActive = item.slug === currentSlug;
+              const imgSrc = serviceImageMap[item.slug] ?? "/utility/recharge.svg";
+              return (
+                <div key={item.slug}
+                  onClick={() => { onClose(); router.push(`/billers?service=${item.slug}`); }}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", cursor: "pointer", background: isActive ? "#edfaf3" : "transparent", transition: "background 0.14s", fontFamily: "'Montserrat',sans-serif" }}
+                  onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "#f4fbff"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = isActive ? "#edfaf3" : "transparent"; }}
+                >
+                  <img src={imgSrc} alt={item.name} style={{ width: 34, height: 34, objectFit: "contain", background: isActive ? "#d4f0e2" : "#f4f6f9", borderRadius: 9, padding: 5, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13.5, fontWeight: 600, color: isActive ? "#1A914B" : "#0d1b2a", flex: 1 }}>{item.name}</span>
+                  {isActive && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#1A914B", flexShrink: 0 }} />}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── SearchableProviderDropdown ───────────────────────────────────────────────
+// ─── SearchableProviderDropdown ───────────────────────────────────────────────
+function SearchableProviderDropdown({ billers, selectedBiller, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Outside click se band karo
+  useEffect(() => {
+    const h = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  // Open hone pe focus, band hone pe query clear
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 40);
+    else setQuery("");
+  }, [open]);
+
+  // ✅ Local filtering — koi API call nahi, parent re-render nahi, dropdown open rehta hai
+  const filtered = query.trim()
+    ? billers.filter((b) =>
+      b.biller_name.toLowerCase().includes(query.toLowerCase())
+    )
+    : billers;
+
+  const handleSelect = (b) => {
+    setOpen(false);
+    setQuery("");
+    onSelect(b); // ✅ Parent ko sirf tab batao jab user select kare
+  };
+
+  return (
+
+
+    <div className="bp-dd-wrap" ref={wrapRef}>
+      <div className="bp-dd-label">Select Provider</div>
+      <button
+        type="button"
+        className={`bp-dd-trigger ${open ? "open" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span style={{ flex: 1 }}>{selectedBiller?.biller_name}</span>
+        <ChevronIcon open={open} />
+      </button>
+
+      {open && (
+        <div className="bp-dd-menu bp-dd-menu--searchable">
+          <div className="bp-dd-search-wrap">
+            <SearchIcon />
+            <input
+              ref={inputRef}
+              type="text"
+              className="bp-dd-search-input"
+              placeholder="Search provider..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button
+                className="bp-dd-clear"
+                onClick={() => {
+                  setQuery("");
+                  inputRef.current?.focus();
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          <div className="bp-dd-list">
+            {filtered.length === 0 ? (
+              <div className="bp-dd-empty">No providers found</div>
+            ) : (
+              filtered.map((b) => (
+                <div
+                  key={b.biller_id}
+                  className={`bp-dd-option ${b.biller_id === selectedBiller?.biller_id ? "sel" : ""
+                    }`}
+                  onClick={() => handleSelect(b)}
+                >
+                  <span>{b.biller_name}</span>
+                  {b.biller_id === selectedBiller?.biller_id && <CheckIcon />}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FetchedCustomerSummary ───────────────────────────────────────────────────
+function FetchedCustomerSummary({ data, billerName, billerSlug, onEdit, onPay, apiLoading, payError }) {
+  const imgSrc = serviceImageMap[billerSlug] ?? "/utility/recharge.svg";
+  const detailRows = [];
+  if (data.customer_name) detailRows.push({ label: "Customer Name", value: data.customer_name });
+  (data.customer_params ?? []).forEach((p) => detailRows.push({ label: p.name, value: p.value }));
+  if (data.bill_number) detailRows.push({ label: "Bill Number", value: data.bill_number });
+
+  return (
+    <div style={{ animation: "bp-fadein 0.3s ease both" }}>
+      <div className="fbp-top-row">
+        <img src={imgSrc} alt={billerName} className="fbp-biller-logo" />
+        <span className="fbp-biller-name">{billerName || "Biller"}</span>
+        <button className="fbp-edit-btn" onClick={onEdit}>EDIT</button>
+      </div>
+      <div className="fbp-divider" />
+      {detailRows.map((row, i) => (
+        <div className="fbp-detail-row" key={i}>
+          <span className="fbp-detail-label">{row.label} :</span>
+          <span className="fbp-detail-value">{row.value}</span>
+        </div>
+      ))}
+      <button className="bp-submit"
+        style={{ marginTop: 28, background: "#1A914B", boxShadow: "0 4px 14px rgba(26,145,75,0.32)" }}
+        disabled={apiLoading} onClick={onPay}>
+        {apiLoading ? "Processing payment…" : "Make Payment →"}
+      </button>
+      {payError && (
+        <div style={{ marginTop: 12, padding: "10px 14px", background: "#fff5f5", border: "1.5px solid #fecaca", borderRadius: 12, fontFamily: "'Montserrat',sans-serif", fontSize: 12, fontWeight: 600, color: "#dc2626", display: "flex", alignItems: "center", gap: 6 }}>
+          <span>⚠️</span> {payError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FetchBillResultPanel ─────────────────────────────────────────────────────
+function FetchBillResultPanel({ data, loading, error, onAmountChange }) {
+  const [editingAmount, setEditingAmount] = useState(false);
+  const [localAmount, setLocalAmount] = useState("");
+  const [amountError, setAmountError] = useState(null);
+
+  const minLimit = parseFloat(data?.additional_info?.find((i) => i.name === "Minimum Amount for Top-up")?.value ?? "0");
+  const maxLimit = parseFloat(data?.additional_info?.find((i) => i.name === "Maximum Permissible Recharge Amount")?.value ?? "Infinity");
+  const hasLimits = minLimit > 0 || maxLimit < Infinity;
+
+  useEffect(() => {
+    if (data?.amount) { setLocalAmount(String(Math.round(parseFloat(data.amount)))); setAmountError(null); }
+  }, [data?.amount]);
+
+  const validateAmount = (val) => {
+    const num = parseFloat(val || "0");
+    if (!val || val.trim() === "") return "Amount is required";
+    if (minLimit > 0 && num < minLimit) return `Minimum recharge amount is ₹${minLimit.toLocaleString("en-IN")}`;
+    if (maxLimit < Infinity && num > maxLimit) return `Maximum recharge amount is ₹${maxLimit.toLocaleString("en-IN")}`;
+    return null;
+  };
+
+  const handleAmountInput = (val) => {
+    const num = parseFloat(val || "0");
+    if (maxLimit < Infinity && num > maxLimit) return;
+    setLocalAmount(val);
+    setAmountError(validateAmount(val));
+  };
+
+  const handleAmountConfirm = () => {
+    const err = validateAmount(localAmount);
+    if (err) { setAmountError(err); return; }
+    setAmountError(null);
+    setEditingAmount(false);
+    if (onAmountChange) onAmountChange(localAmount);
+  };
+
+  if (loading) {
+    return (
+      <div className="fbp-card fbp-card--loading">
+        <div className="fbp-shimmer-wrap">
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 20 }}>
+            <Shimmer w={36} h={36} r={8} /><Shimmer w="55%" h={18} r={6} />
+          </div>
+          <Shimmer h={14} w="70%" r={5} /><Shimmer h={14} w="60%" r={5} /><Shimmer h={14} w="75%" r={5} />
+          <div style={{ height: 1, background: "#f0f2f5", margin: "16px 0" }} />
+          <Shimmer h={32} w="45%" r={6} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 16 }}>
+            <Shimmer h={52} r={8} /><Shimmer h={52} r={8} /><Shimmer h={52} r={8} /><Shimmer h={52} r={8} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="fbp-card fbp-card--error">
+        <div className="fbp-error-icon">⚠️</div>
+        <div className="fbp-error-title">Could not fetch bill</div>
+        <div className="fbp-error-sub">{error}</div>
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const displayAmt = localAmount
+    ? `₹${parseFloat(localAmount).toLocaleString("en-IN")}`
+    : data.amount ? `₹${parseFloat(data.amount).toLocaleString("en-IN")}` : "—";
+
+  return (
+    <div className="fbp-card fbp-card--filled">
+      <div className="fbp-amount-section">
+        <div className="fbp-amount-label">Bill Amount</div>
+        {editingAmount ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <div style={{ position: "relative", flex: 1 }}>
+              <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontWeight: 700, fontSize: 15, color: "#0d1b2a", pointerEvents: "none", fontFamily: "'Montserrat',sans-serif" }}>₹</span>
+              <input autoFocus type="text" inputMode="numeric" value={localAmount}
+                onChange={(e) => handleAmountInput(e.target.value.replace(/[^0-9]/g, ""))}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAmountConfirm(); }}
+                style={{ width: "100%", padding: "10px 12px 10px 30px", border: "1.5px solid #00baf2", borderRadius: 10, fontFamily: "'Montserrat',sans-serif", fontSize: 16, fontWeight: 700, color: "#0d1b2a", outline: "none", boxShadow: "0 0 0 3px rgba(0,186,242,0.12)", background: "#fff" }} />
+            </div>
+            <button onClick={handleAmountConfirm}
+              style={{ background: amountError ? "#9ca3af" : "#1A914B", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontFamily: "'Montserrat',sans-serif", fontSize: 13, fontWeight: 700, cursor: amountError ? "not-allowed" : "pointer", whiteSpace: "nowrap", transition: "background 0.15s", opacity: amountError ? 0.7 : 1 }}>
+              Done ✓
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 4 }}>
+            <div className="fbp-amount-value">{displayAmt}</div>
+            <button className="fbp-edit-btn" onClick={() => { setAmountError(null); setEditingAmount(true); }}>EDIT</button>
+          </div>
+        )}
+        {amountError && (
+          <div style={{ marginTop: 7, fontSize: 11.5, fontWeight: 600, color: "#dc2626", fontFamily: "'Montserrat',sans-serif", display: "flex", alignItems: "center", gap: 4 }}>
+            <span>⚠</span> {amountError}
+          </div>
+        )}
+        {!amountError && hasLimits && (
+          <div style={{ marginTop: 5, fontSize: 11, color: "#9aa0ab", fontFamily: "'Montserrat',sans-serif" }}>
+            {minLimit > 0 && `Min ₹${minLimit.toLocaleString("en-IN")}`}
+            {minLimit > 0 && maxLimit < Infinity && " · "}
+            {maxLimit < Infinity && `Max ₹${maxLimit.toLocaleString("en-IN")}`}
+          </div>
+        )}
+      </div>
+      {data.additional_info?.length > 0 && (
+        <div className="fbp-info-grid">
+          {data.additional_info.map((item, i) => (
+            <div className="fbp-info-cell" key={i}>
+              <div className="fbp-info-cell-label">{item.name}</div>
+              <div className="fbp-info-cell-value">{item.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {(data.due_date || data.bill_date || data.bill_period) && (
+        <div className="fbp-info-grid" style={{ marginTop: 0 }}>
+          {data.due_date && <div className="fbp-info-cell"><div className="fbp-info-cell-label">Due Date</div><div className="fbp-info-cell-value">{data.due_date}</div></div>}
+          {data.bill_date && <div className="fbp-info-cell"><div className="fbp-info-cell-label">Bill Date</div><div className="fbp-info-cell-value">{data.bill_date}</div></div>}
+          {data.bill_period && <div className="fbp-info-cell"><div className="fbp-info-cell-label">Period</div><div className="fbp-info-cell-value">{data.bill_period}</div></div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main BillerPage
+// ─────────────────────────────────────────────────────────────────────────────
+export default function BillerPage({ slug }) {
+  const router = useRouter();
+  const [showServiceError, setShowServiceError] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [fetchContactFields, setFetchContactFields] = useState({ mobile: "", email: "" });
+  const [fetchContactErrors, setFetchContactErrors] = useState({});
+
+  // ✅ search prop removed — fetchBillers() called directly for search
+  const { data: billers, loading, error, fetchBillers } = useGetBbpsBillers(slug, {
+    offset: 0, limit: BILLER_LIMIT,
+  });
+
+  // ✅ debounceRef for provider search
+  const searchDebounceRef = useRef(null);
+  const [selectedBiller, setSelectedBiller] = useState(null);
+  const activeBillers = useMemo(() => {
+    const list = (billers ?? []).filter((b) => b.status === "ACTIVE");
+    // Agar selectedBiller search results mein nahi hai, usse top par add karo
+    if (selectedBiller && !list.find((b) => b.biller_id === selectedBiller.biller_id)) {
+      return [selectedBiller, ...list];
+    }
+    return list;
+  }, [billers, selectedBiller]);
+
+
+  const [fieldValues, setFieldValues] = useState({});
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [touchedFields, setTouchedFields] = useState({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [overrideAmount, setOverrideAmount] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [payloadSnapshot, setPayloadSnapshot] = useState(null);
+  // ✅ track if a search is currently active to show spinner correctly
+  const [isSearching, setIsSearching] = useState(false);
+
+  const moreWrapRef = useRef(null);
+
+  const billValidation = useBillValidation();
+  const fetchBillHook = useFetchBill();
+  const payBillHook = usePayBill();
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  const visibleCount = isMobile ? MOBILE_VISIBLE : DESKTOP_VISIBLE;
+  const visibleNavItems = NAV_ITEMS.slice(0, visibleCount);
+  const pinnedSlugs = visibleNavItems.map((i) => i.slug);
+  const dropdownVisibleRows = isMobile ? 5 : 7;
+
+  const isDirectValidation = isDirectPayWithValidation(selectedBiller);
+  const isFetchFlow = isFetchAndPay(selectedBiller);
+  const needsContactFields = isDirectValidation || isFetchFlow;
+  const hasFetchedData = isFetchFlow && !!fetchBillHook.data;
+  const fetchSucceeded = isFetchFlow && !!fetchBillHook.data && !fetchBillHook.error;
+
+  // ✅ Auto-select first biller on initial load only
+  useEffect(() => {
+    if (activeBillers.length > 0 && !selectedBiller && !isSearching)
+      setSelectedBiller(activeBillers[0]);
+  }, [activeBillers.length, isSearching]);
+
+  // Reset form when biller changes
+  useEffect(() => {
+    setFieldValues({});
+    setFieldErrors({});
+    setTouchedFields({});
+    setSubmitAttempted(false);
+    setOverrideAmount(null);
+    setPayloadSnapshot(null);
+    setFetchContactFields({ mobile: "", email: "" });
+    setFetchContactErrors({});
+    billValidation.reset();
+    fetchBillHook.reset();
+    payBillHook.reset();
+  }, [selectedBiller?.biller_id]);
+
+  // ✅ handleBillerSearch — debounced, calls fetchBillers directly (no state reset)
+  const handleBillerSearch = useCallback((query) => {
+    clearTimeout(searchDebounceRef.current);
+    setIsSearching(true);
+    searchDebounceRef.current = setTimeout(async () => {
+      await fetchBillers(query);
+      setIsSearching(false);
+    }, 350);
+  }, [fetchBillers]);
+
+  const handleFieldChange = (paramName, value, param) => {
+    setFieldValues((prev) => ({ ...prev, [paramName]: value }));
+    if (touchedFields[paramName] || submitAttempted)
+      setFieldErrors((prev) => ({ ...prev, [paramName]: validateField(value, param) }));
+  };
+
+  const handleFieldBlur = (paramName, value, param) => {
+    setTouchedFields((prev) => ({ ...prev, [paramName]: true }));
+    setFieldErrors((prev) => ({ ...prev, [paramName]: validateField(value, param) }));
+  };
+
+  const handleContactChange = (field, value) => {
+    setFetchContactFields((prev) => ({ ...prev, [field]: value }));
+    if (fetchContactErrors[field])
+      setFetchContactErrors((prev) => ({ ...prev, [field]: null }));
+  };
+
+  const handleContactBlur = (field, value) => {
+    let err = null;
+    if (field === "mobile") {
+      if (!value.trim()) err = "Mobile number is required";
+      else if (!/^\d{10}$/.test(value.trim())) err = "Enter a valid 10-digit mobile number";
+    }
+    if (field === "email") {
+      if (!value.trim()) err = "Email is required";
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) err = "Enter a valid email address";
+    }
+    setFetchContactErrors((prev) => ({ ...prev, [field]: err }));
+  };
+
+  const validateContactFields = () => {
+    const contactErrors = {};
+    if (!fetchContactFields.mobile.trim())
+      contactErrors.mobile = "Mobile number is required";
+    else if (!/^\d{10}$/.test(fetchContactFields.mobile.trim()))
+      contactErrors.mobile = "Enter a valid 10-digit mobile number";
+    if (!fetchContactFields.email.trim())
+      contactErrors.email = "Email is required";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fetchContactFields.email.trim()))
+      contactErrors.email = "Enter a valid email address";
+    return contactErrors;
+  };
+
+  const handleEdit = () => {
+    fetchBillHook.reset();
+    billValidation.reset();
+    payBillHook.reset();
+    setSubmitAttempted(false);
+    setOverrideAmount(null);
+    setPayloadSnapshot(null);
+  };
+
+  const handleMakePayment = async () => {
+    const finalAmount = parseFloat(overrideAmount ?? fetchBillHook.data?.amount ?? "0");
+
+    // Min/max validation
+    const info = fetchBillHook.data?.additional_info ?? [];
+    const minLimit = parseFloat(info.find((i) => i.name === "Minimum Amount for Top-up")?.value ?? "0");
+    const maxLimit = parseFloat(info.find((i) => i.name === "Maximum Permissible Recharge Amount")?.value ?? "Infinity");
+
+    if (minLimit > 0 && finalAmount < minLimit) {
+      alert(`Minimum recharge amount is ₹${minLimit.toLocaleString("en-IN")}. Please edit the amount.`);
+      return;
+    }
+    if (maxLimit < Infinity && finalAmount > maxLimit) {
+      alert(`Maximum recharge amount is ₹${maxLimit.toLocaleString("en-IN")}. Please edit the amount.`);
+      return;
+    }
+
+    try {
+      // ✅ Commented current working payBill code
+      /*
+      const ref_id =
+        fetchBillHook.data?.ref_id ??
+        billValidation.data?.validation?.refId ??
+        billValidation.data?.ref_id ??
+        "";
+  
+      const result = await payBillHook.payBill({
+        biller_id: selectedBiller.biller_id,
+        amount: String(finalAmount),
+        service: slug,
+        customer_params: payloadSnapshot,
+        mobile: fetchContactFields.mobile.trim(),
+        email: fetchContactFields.email.trim(),
+        ref_id,
+      });
+  
+      if (result.ok) {
+        router.push(
+          `/payment-success?` +
+          new URLSearchParams({
+            biller_name: selectedBiller.biller_name,
+            amount: String(finalAmount),
+            service: slug,
+            ref_id,
+          }).toString()
+        );
+      }
+      */
+
+      // ⚠️ Show overlay instead
+      setShowServiceError(true);
+    } catch (err) {
+      setShowServiceError(true);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitAttempted(true);
+    if (!selectedBiller) return;
+
+    const errors = {};
+    selectedBiller.customer_params.forEach((param) => {
+      if (isMobileParam(param.name)) return;
+      const err = validateField(fieldValues[param.name] ?? "", param);
+      if (err) errors[param.name] = err;
+    });
+
+    if (shouldShowAmountField(selectedBiller)) {
+      const amtErr = validateField(fieldValues["__amount__"] ?? "", { ...AMOUNT_PARAM, optional: false });
+      if (amtErr) errors["__amount__"] = amtErr;
+    }
+
+    setFieldErrors(errors);
+    setTouchedFields(
+      Object.fromEntries([
+        ...selectedBiller.customer_params.filter((p) => !isMobileParam(p.name)).map((p) => [p.name, true]),
+        ...(shouldShowAmountField(selectedBiller) ? [["__amount__", true]] : []),
+      ])
+    );
+    if (Object.keys(errors).length > 0) return;
+
+    if (needsContactFields) {
+      const contactErrors = validateContactFields();
+      if (Object.keys(contactErrors).length > 0) {
+        setFetchContactErrors(contactErrors);
+        return;
+      }
+    }
+
+    const customerParams = selectedBiller.customer_params
+      .filter((p) => {
+        if (isMobileParam(p.name)) return true;
+        if (p.optional && (fieldValues[p.name] ?? "").trim() === "") return false;
+        return true;
+      })
+      .map((p) => ({
+        name: p.name,
+        value: isMobileParam(p.name) ? fetchContactFields.mobile.trim() : (fieldValues[p.name] ?? "").trim(),
+      }));
+
+    setPayloadSnapshot(customerParams);
+
+    if (isDirectValidation) {
+      try {
+        const valResult = await billValidation.validate({
+          biller_id: selectedBiller.biller_id,
+          customer_params: customerParams,
+          mobile: fetchContactFields.mobile.trim(),
+          email: fetchContactFields.email.trim(),
+        });
+
+        if (!valResult.ok) {
+          setShowServiceError(true);
+          return;
+        }
+
+        // ✅ Commented actual payment
+        /*
+        const ref_id = valResult.data?.validation?.refId ?? valResult.data?.ref_id ?? "";
+    
+        const payResult = await payBillHook.payBill({
+          biller_id: selectedBiller.biller_id,
+          amount: String(fieldValues["__amount__"] ?? ""),
+          service: slug,
+          customer_params: customerParams,
+          mobile: fetchContactFields.mobile.trim(),
+          email: fetchContactFields.email.trim(),
+          ref_id,
+        });
+    
+        if (payResult.ok) {
+          router.push(
+            `/payment-success?` +
+            new URLSearchParams({
+              biller_name: selectedBiller.biller_name,
+              amount: String(fieldValues["__amount__"] ?? ""),
+              service: slug,
+              ref_id,
+            }).toString()
+          );
+        }
+        */
+
+        // ⚠️ Show overlay instead
+        setShowServiceError(true);
+      } catch (err) {
+        setShowServiceError(true);
+      }
+      return;
+    }
+
+    if (isFetchFlow) {
+      const result = await fetchBillHook.fetchBill({
+        biller_id: selectedBiller.biller_id,
+        customer_params: customerParams,
+        mobile: fetchContactFields.mobile.trim(),
+        email: fetchContactFields.email.trim(),
+      });
+      if (result.ok) setOverrideAmount(null);
+    }
+  };
+
+  const pageTitle = slug
+    ? slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    : "Bill Payment";
+  const showAmount = shouldShowAmountField(selectedBiller);
+  const amtOptional = selectedBiller?.validation_requirement === "OPTIONAL";
+  const amtVal = fieldValues["__amount__"] ?? "";
+  const amtErr = fieldErrors["__amount__"];
+  const amtTouched = touchedFields["__amount__"];
+  const amtValid = amtTouched && !amtErr && amtVal.trim() !== "";
+  const apiLoading = billValidation.loading || fetchBillHook.loading || payBillHook.loading;
+  // ✅ searchLoading — true only during active provider search
+  const searchLoading = isSearching || (loading && !billers);
+
+
+
+  return (
+    <>
+
+
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap');
+        @keyframes bp-shimmer  { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+        @keyframes bp-fadein   { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes fbp-slidein { from{opacity:0;transform:translateX(22px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes dd-open     { from{opacity:0;transform:scale(0.93) translateY(-6px)} to{opacity:1;transform:scale(1) translateY(0)} }
+        @keyframes bp-spin     { to{transform:rotate(360deg)} }
+        *,*::before,*::after { box-sizing:border-box }
+
+        .bp-root   { font-family:'Montserrat',sans-serif;min-height:100vh;background:#f4f6f9;display:flex;flex-direction:column }
+        .bp-header { background:#1A914B;padding:16px 0 92px }
+
+        .bp-nav-scroller { max-width:1200px;margin:0 auto;padding:0 12px;display:flex;align-items:stretch;justify-content:space-between;gap:6px;width:100% }
+        .bp-nav-btn { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:10px 8px;border-radius:10px;cursor:pointer;border:none;background:transparent;color:rgba(255,255,255,0.65);font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;white-space:nowrap;transition:all 0.18s;flex:1;text-decoration:none;line-height:1.3;min-width:0 }
+        .bp-nav-btn:hover { background:rgba(255,255,255,0.09);color:#fff }
+        .bp-nav-btn.active { color:#fff;border-bottom:2.5px solid #00baf2;border-radius:10px 10px 0 0 }
+        .bp-nav-btn-img { width:30px;height:30px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.7;flex-shrink:0 }
+        .bp-nav-btn.active .bp-nav-btn-img { opacity:1 }
+        .bp-nav-btn:hover .bp-nav-btn-img { opacity:0.9 }
+        .bp-nav-more-wrap { position:relative;flex-shrink:0;margin-top:6px;z-index:10001 }
+        @media (max-width:520px) { .bp-nav-more-wrap { margin-top:10px } }
+        .bp-nav-more { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:10px 14px;border-radius:10px;cursor:pointer;border:none;background:rgba(255,255,255,0.13);color:#fff;font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;white-space:nowrap;transition:all 0.18s }
+        .bp-nav-more:hover { background:rgba(255,255,255,0.22) }
+        .bp-nav-more-dots { display:flex;gap:3px;align-items:center }
+        .bp-nav-more-dot  { width:5px;height:5px;border-radius:50%;background:#fff }
+
+        .bp-body { flex:1;display:flex;justify-content:center;padding:0 16px 48px;margin-top:-72px;position:relative;z-index:10 }
+        .bp-content-wrap { display:flex;align-items:flex-start;gap:20px;width:100%;max-width:520px;justify-content:center;transition:max-width 0.4s cubic-bezier(0.34,1.1,0.64,1) }
+        .bp-content-wrap.has-panel { max-width:1040px }
+        .bp-card { background:#fff;border-radius:20px;box-shadow:0 8px 40px rgba(0,0,0,0.11);border:1px solid #f0f2f5;padding:32px 28px;width:100%;animation:bp-fadein 0.3s ease both;flex-shrink:0;transition:width 0.4s cubic-bezier(0.34,1.1,0.64,1),max-width 0.4s cubic-bezier(0.34,1.1,0.64,1) }
+        .bp-content-wrap:not(.has-panel) .bp-card { max-width:460px }
+        .bp-content-wrap.has-panel .bp-card { width:40%;max-width:420px;flex-shrink:0 }
+        .bp-card-title { font-size:19px;font-weight:800;color:#0d1b2a;margin-bottom:28px }
+        .bp-skeleton-wrap { display:flex;flex-direction:column;gap:14px }
+
+        .bp-dd-wrap    { position:relative;margin-bottom:22px }
+        .bp-dd-label   { font-size:11px;font-weight:700;color:#9aa0ab;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:7px }
+        .bp-dd-trigger { width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 15px;border:1.5px solid #dde1e9;border-radius:12px;background:#fff;cursor:pointer;font-family:'Montserrat',sans-serif;font-size:14px;font-weight:600;color:#0d1b2a;transition:border-color 0.2s;text-align:left }
+        .bp-dd-trigger:hover,.bp-dd-trigger:focus { border-color:#00baf2;outline:none }
+        .bp-dd-trigger.open { border-color:#00baf2;border-radius:12px 12px 0 0;box-shadow:0 0 0 3px rgba(0,186,242,0.1) }
+        .bp-dd-menu { position:absolute;top:100%;left:0;right:0;background:#fff;border:1.5px solid #00baf2;border-top:none;border-radius:0 0 12px 12px;z-index:200;box-shadow:0 10px 28px rgba(0,0,0,0.1);overflow:hidden }
+        .bp-dd-search-wrap { display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #f0f2f5;position:sticky;top:0;background:#fff;z-index:1 }
+        .bp-dd-search-input { flex:1;border:none;outline:none;font-family:'Montserrat',sans-serif;font-size:13px;font-weight:500;color:#0d1b2a;background:transparent }
+        .bp-dd-search-input::placeholder { color:#c0c6d0 }
+        .bp-dd-clear { border:none;background:none;cursor:pointer;color:#9aa0ab;font-size:12px;padding:0;line-height:1;transition:color 0.15s }
+        .bp-dd-clear:hover { color:#e53935 }
+        .bp-dd-list { max-height:220px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#e0e0e0 transparent }
+        .bp-dd-list::-webkit-scrollbar { width:4px }
+        .bp-dd-list::-webkit-scrollbar-thumb { background:#dde1e9;border-radius:8px }
+        .bp-dd-option { padding:13px 15px;font-size:13.5px;font-weight:500;color:#333;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:background 0.14s }
+        .bp-dd-option:hover { background:#f4fbff }
+        .bp-dd-option.sel  { background:#edfaf3;color:#1A914B;font-weight:700 }
+        .bp-dd-empty { padding:20px 16px;text-align:center;font-size:12px;color:#9aa0ab;font-family:'Montserrat',sans-serif }
+        .bp-dd-spin { width:14px;height:14px;flex-shrink:0;border:2px solid #e0e0e0;border-top-color:#1A914B;border-radius:50%;animation:bp-spin 0.7s linear infinite }
+
+        .bp-field        { margin-bottom:20px }
+        .bp-field-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:7px }
+        .bp-field-label  { font-size:11px;font-weight:700;color:#9aa0ab;text-transform:uppercase;letter-spacing:0.6px }
+        .bp-optional-pill { font-size:10px;font-weight:600;color:#aab0bb;background:#f4f6f9;padding:2px 8px;border-radius:20px }
+        .bp-input { width:100%;padding:13px 15px;border:1.5px solid #dde1e9;border-radius:12px;font-family:'Montserrat',sans-serif;font-size:14px;font-weight:500;color:#0d1b2a;outline:none;transition:border-color 0.2s,box-shadow 0.2s;background:#fff }
+        .bp-input::placeholder { color:#c0c6d0;font-weight:400 }
+        .bp-input:focus   { border-color:#00baf2;box-shadow:0 0 0 3.5px rgba(0,186,242,0.12) }
+        .bp-input.has-err { border-color:#e53935 }
+        .bp-input.has-err:focus { box-shadow:0 0 0 3.5px rgba(229,57,53,0.1) }
+        .bp-input.valid   { border-color:#1A914B }
+        .bp-err-text  { font-size:11.5px;font-weight:600;color:#e53935;margin-top:5px;display:flex;align-items:center;gap:4px }
+        .bp-hint-text { font-size:11px;color:#b0b8c4;margin-top:5px }
+        .bp-amount-wrap  { position:relative }
+        .bp-rupee-prefix { position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px;font-weight:700;color:#0d1b2a;pointer-events:none }
+        .bp-input-amount { padding-left:32px !important }
+        .bp-submit { width:100%;padding:15px;background:#1A914B;color:#fff;border:none;border-radius:13px;font-family:'Montserrat',sans-serif;font-size:15px;font-weight:700;cursor:pointer;transition:background 0.2s,transform 0.12s,box-shadow 0.2s;margin-top:6px;box-shadow:0 4px 14px rgba(26,145,75,0.32) }
+        .bp-submit:hover:not(:disabled) { background:#15803d }
+        .bp-submit:active:not(:disabled) { transform:scale(0.985) }
+        .bp-submit:disabled { opacity:0.65;cursor:not-allowed }
+        .bp-state-box   { text-align:center;padding:36px 20px }
+        .bp-state-icon  { font-size:36px;margin-bottom:12px }
+        .bp-state-title { font-size:16px;font-weight:700;color:#0d1b2a;margin-bottom:6px }
+        .bp-state-sub   { font-size:13px;color:#9aa0ab;line-height:1.6 }
+
+        .bp-contact-divider { display:flex;align-items:center;gap:10px;margin:4px 0 20px }
+        .bp-contact-divider-line { flex:1;height:1px;background:#eef0f3 }
+        .bp-contact-divider-label { font-size:10.5px;font-weight:700;color:#b0b8c4;text-transform:uppercase;letter-spacing:0.6px;white-space:nowrap }
+
+        .fbp-card { background:#fff;border-radius:20px;box-shadow:0 8px 40px rgba(0,0,0,0.09);border:1px solid #eef0f3;padding:24px 24px 28px;flex:1;min-width:0;animation:fbp-slidein 0.38s cubic-bezier(0.34,1.1,0.64,1) both;align-self:flex-start }
+        .fbp-card--loading { min-height:260px }
+        .fbp-shimmer-wrap  { display:flex;flex-direction:column;gap:12px }
+        .fbp-card--error   { text-align:center;padding:40px 20px }
+        .fbp-error-icon    { font-size:32px;margin-bottom:10px }
+        .fbp-error-title   { font-size:14px;font-weight:700;color:#e53935;margin-bottom:6px;font-family:'Montserrat',sans-serif }
+        .fbp-error-sub     { font-size:12px;color:#9aa0ab;line-height:1.6;font-family:'Montserrat',sans-serif }
+        .fbp-top-row { display:flex;align-items:center;gap:10px;margin-bottom:14px }
+        .fbp-biller-logo { width:34px;height:34px;object-fit:contain;background:#f4f6f9;border-radius:8px;padding:4px;flex-shrink:0 }
+        .fbp-biller-name { font-size:14px;font-weight:700;color:#0d1b2a;flex:1 }
+        .fbp-edit-btn { background:none;border:none;color:#1A914B;font-family:'Montserrat',sans-serif;font-size:12px;font-weight:700;cursor:pointer;padding:0;letter-spacing:0.3px;transition:opacity 0.15s }
+        .fbp-edit-btn:hover { opacity:0.7 }
+        .fbp-divider { height:1px;background:#f0f2f5;margin:0 0 14px }
+        .fbp-detail-row   { display:flex;align-items:baseline;gap:6px;margin-bottom:9px;font-family:'Montserrat',sans-serif }
+        .fbp-detail-label { font-size:13px;font-weight:500;color:#4b5563;white-space:nowrap;flex-shrink:0 }
+        .fbp-detail-value { font-size:13px;font-weight:600;color:#0d1b2a }
+        .fbp-amount-section { margin-bottom:18px }
+        .fbp-amount-label   { font-size:12px;font-weight:600;color:#6b7280;font-family:'Montserrat',sans-serif;margin-bottom:2px }
+        .fbp-amount-value   { font-size:28px;font-weight:800;color:#0d1b2a;font-family:'Montserrat',sans-serif;letter-spacing:-0.5px }
+        .fbp-info-grid { display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin-top:16px;padding-top:16px;border-top:1px solid #f0f2f5 }
+        .fbp-info-cell       { display:flex;flex-direction:column;gap:3px }
+        .fbp-info-cell-label { font-size:11.5px;font-weight:600;color:#9aa0ab;font-family:'Montserrat',sans-serif }
+        .fbp-info-cell-value { font-size:13px;font-weight:700;color:#0d1b2a;font-family:'Montserrat',sans-serif }
+
+        @media (max-width:860px) {
+          .bp-content-wrap,.bp-content-wrap.has-panel { flex-direction:column;align-items:center;max-width:520px }
+          .bp-content-wrap.has-panel .bp-card { width:100%;max-width:100% }
+          .fbp-card { width:100% }
+        }
+        @media (max-width:520px) {
+          .bp-card { padding:22px 16px;border-radius:16px }
+          .bp-body { margin-top:-60px }
+          .bp-header { padding-bottom:55px }
+        }
+      `}</style>
+
+      <div className="bp-root">
+
+        {/* ── Green header ── */}
+        <div className="bp-header">
+          <div className="bp-nav-scroller">
+            {visibleNavItems.map((item) => {
+              const imgSrc = serviceImageMap[item.slug] ?? "/utility/recharge.svg";
+              const isActive = item.slug === slug;
+              return (
+                <a key={item.slug} href={`/billers?service=${item.slug}`} className={`bp-nav-btn ${isActive ? "active" : ""}`}>
+                  <img src={imgSrc} alt={item.label} className="bp-nav-btn-img" />
+                  {item.label}
+                </a>
+              );
+            })}
+            <div className="bp-nav-more-wrap" ref={moreWrapRef}>
+              <button className="bp-nav-more" onClick={() => setMoreOpen((o) => !o)}>
+                <div className="bp-nav-more-dots">
+                  <div className="bp-nav-more-dot" /><div className="bp-nav-more-dot" /><div className="bp-nav-more-dot" />
+                </div>
+                More
+              </button>
+              <MoreDropdown isOpen={moreOpen} onClose={() => setMoreOpen(false)} currentSlug={slug} pinnedSlugs={pinnedSlugs} visibleRows={dropdownVisibleRows} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Main content ── */}
+        <div className="bp-body">
+          <div className={`bp-content-wrap ${hasFetchedData ? "has-panel" : ""}`}>
+            <div className="bp-card">
+              <div className="bp-card-title">{pageTitle}</div>
+
+              {/* ✅ shimmer only on true initial load (billers not yet fetched) */}
+              {loading && !billers && (
+                <div className="bp-skeleton-wrap">
+                  <Shimmer h={18} w="45%" r={6} />
+                  <Shimmer h={48} />
+                  <Shimmer h={18} w="38%" r={6} />
+                  <Shimmer h={48} />
+                  <Shimmer h={48} />
+                  <Shimmer h={50} r={13} />
+                </div>
+              )}
+
+              {!loading && error && (
+                <div className="bp-state-box">
+                  <div className="bp-state-icon">⚠️</div>
+                  <div className="bp-state-title">Could not load billers</div>
+                  <div className="bp-state-sub">{error}</div>
+                </div>
+              )}
+
+              {!loading && !error && billers !== null && activeBillers.length === 0 && !isSearching && (
+                <div className="bp-state-box">
+                  <div className="bp-state-icon">🔍</div>
+                  <div className="bp-state-title">No active billers found</div>
+                  <div className="bp-state-sub">This service currently has no active billers.<br />Please try again later.</div>
+                </div>
+              )}
+
+              {!loading && !error && selectedBiller && fetchSucceeded && (
+                showServiceError ? (
+                  <ServiceUnavailableOverlay
+                    onRetry={() => {
+                      setShowServiceError(false);
+                      setRetrying(false);
+                    }}
+                    retrying={retrying}
+                  />
+                ) :
+                  <FetchedCustomerSummary
+                    data={fetchBillHook.data}
+                    billerName={selectedBiller.biller_name}
+                    billerSlug={slug}
+                    onEdit={handleEdit}
+                    onPay={handleMakePayment}
+                    apiLoading={apiLoading}
+                    payError={payBillHook.error}
+                  />
+              )}
+
+              {!loading && !error && selectedBiller && !fetchSucceeded && (
+                showServiceError ? (
+                  <ServiceUnavailableOverlay
+                    onRetry={() => {
+                      setShowServiceError(false);
+                      setRetrying(false);
+                    }}
+                    retrying={retrying}
+                  />
+                ) : (
+                  <form onSubmit={handleSubmit} noValidate>
+                    {activeBillers.length > 1 && (
+                      <SearchableProviderDropdown
+                        billers={activeBillers}
+                        selectedBiller={selectedBiller}
+                        onSelect={(b) => setSelectedBiller(b)}
+                      />
+                    )}
+
+                    {selectedBiller.customer_params.map((param) => {
+                      if (isMobileParam(param.name)) return null;
+                      const val = fieldValues[param.name] ?? "";
+                      const err = fieldErrors[param.name];
+                      const touched = touchedFields[param.name];
+                      const isValid = touched && !err && val.trim() !== "";
+                      const min = parseInt(param.min_length, 10);
+                      const max = parseInt(param.max_length, 10);
+                      const placeholder =
+                        !isNaN(min) && !isNaN(max) && min !== max
+                          ? `Enter ${min}–${max} characters`
+                          : !isNaN(max) ? `Enter up to ${max} characters` : `Enter ${param.name}`;
+                      const hint =
+                        param.data_type === "NUMERIC" ? "Numbers only"
+                          : param.data_type === "ALPHABETIC" ? "Letters only"
+                            : param.data_type === "ALPHANUMERIC" ? "Letters and numbers accepted"
+                              : null;
+                      return (
+                        <div key={param.name} className="bp-field">
+                          <div className="bp-field-header">
+                            <label className="bp-field-label">{param.name}</label>
+                            {param.optional && <span className="bp-optional-pill">Optional</span>}
+                          </div>
+                          <input
+                            type="text"
+                            inputMode="email"
+                            autoComplete="email"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck="false"
+                            className={`bp-input ${err ? "has-err" : ""} ${isValid ? "valid" : ""}`}
+                            value={val}
+                            placeholder={isEmailParam(param.name) ? "you@example.com" : placeholder}
+                            maxLength={!isNaN(max) ? max : undefined}
+                            onChange={(e) => {
+                              const newVal = isEmailParam(param.name)
+                                ? e.target.value.replace(/[^a-z0-9@._\-]/g, "")
+                                : e.target.value;
+                              handleFieldChange(param.name, newVal, param);
+                            }}
+                            onBlur={(e) => handleFieldBlur(param.name, e.target.value, param)}
+                          />
+                          {err && <div className="bp-err-text"><span>⚠</span> {err}</div>}
+                          {!err && hint && <div className="bp-hint-text">{hint}</div>}
+                        </div>
+                      );
+                    })}
+
+                    {showAmount && (
+                      <div className="bp-field">
+                        <div className="bp-field-header">
+                          <label className="bp-field-label">Amount (₹)</label>
+                        </div>
+                        <div className="bp-amount-wrap">
+                          <span className="bp-rupee-prefix">₹</span>
+                          <input type="text" inputMode="numeric"
+                            className={`bp-input bp-input-amount ${amtErr ? "has-err" : ""} ${amtValid ? "valid" : ""}`}
+                            value={amtVal} placeholder="0" maxLength={10}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^0-9]/g, "");
+                              handleFieldChange("__amount__", raw, { ...AMOUNT_PARAM, optional: amtOptional });
+                            }}
+                            onBlur={(e) => handleFieldBlur("__amount__", e.target.value, { ...AMOUNT_PARAM, optional: amtOptional })}
+                          />
+                        </div>
+                        {amtErr && <div className="bp-err-text"><span>⚠</span> {amtErr}</div>}
+                        {!amtErr && <div className="bp-hint-text">Enter amount in rupees, no decimals</div>}
+                      </div>
+                    )}
+
+                    {needsContactFields && (
+                      <>
+                        <div className="bp-contact-divider">
+                          <div className="bp-contact-divider-line" />
+                          <span className="bp-contact-divider-label">Contact Details</span>
+                          <div className="bp-contact-divider-line" />
+                        </div>
+                        <div className="bp-field">
+                          <div className="bp-field-header">
+                            <label className="bp-field-label">Mobile Number</label>
+                          </div>
+                          <input type="text" inputMode="numeric"
+                            className={`bp-input ${fetchContactErrors.mobile ? "has-err" : ""} ${!fetchContactErrors.mobile && fetchContactFields.mobile.length === 10 ? "valid" : ""}`}
+                            value={fetchContactFields.mobile} placeholder="10-digit mobile number" maxLength={10}
+                            onChange={(e) => handleContactChange("mobile", e.target.value.replace(/[^0-9]/g, ""))}
+                            onBlur={(e) => handleContactBlur("mobile", e.target.value)}
+                          />
+                          {fetchContactErrors.mobile
+                            ? <div className="bp-err-text"><span>⚠</span> {fetchContactErrors.mobile}</div>
+                            : <div className="bp-hint-text">Used for payment confirmation</div>}
+                        </div>
+                        <div className="bp-field">
+                          <div className="bp-field-header">
+                            <label className="bp-field-label">Email Address</label>
+                          </div>
+                          <input type="email" inputMode="email"
+                            className={`bp-input ${fetchContactErrors.email ? "has-err" : ""} ${!fetchContactErrors.email && fetchContactFields.email.includes("@") ? "valid" : ""}`}
+                            value={fetchContactFields.email} placeholder="you@example.com"
+                            onChange={(e) => handleContactChange("email", e.target.value)}
+                            onBlur={(e) => handleContactBlur("email", e.target.value)}
+                          />
+                          {fetchContactErrors.email
+                            ? <div className="bp-err-text"><span>⚠</span> {fetchContactErrors.email}</div>
+                            : <div className="bp-hint-text">Receipt will be sent to this email</div>}
+                        </div>
+                      </>
+                    )}
+
+                    <button type="submit" className="bp-submit" disabled={apiLoading}>
+                      {apiLoading ? "Please wait…" : "Proceed to Pay →"}
+                    </button>
+
+                    {(fetchBillHook.error || billValidation.error || payBillHook.error) && (
+                      <div style={{ marginTop: 14, padding: "12px 14px", background: "#fff5f5", border: "1.5px solid #fecaca", borderRadius: 12, display: "flex", alignItems: "flex-start", gap: 10, animation: "bp-fadein 0.25s ease both" }}>
+                        <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>⚠️</span>
+                        <div>
+                          <div style={{ fontFamily: "'Montserrat',sans-serif", fontSize: 12, fontWeight: 700, color: "#dc2626", marginBottom: 2 }}>
+                            {fetchBillHook.error ? "Could not fetch bill" : payBillHook.error ? "Payment failed" : "Validation failed"}
+                          </div>
+                          <div style={{ fontFamily: "'Montserrat',sans-serif", fontSize: 12, fontWeight: 500, color: "#b91c1c", lineHeight: 1.5 }}>
+                            {fetchBillHook.error || payBillHook.error || billValidation.error}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </form>
+                )
+              )}
+            </div>
+
+            {hasFetchedData && (
+              <FetchBillResultPanel
+                data={fetchBillHook.data}
+                loading={fetchBillHook.loading}
+                error={fetchBillHook.error}
+                onAmountChange={(amt) => setOverrideAmount(amt)}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
