@@ -565,6 +565,39 @@ export default function Navbar() {
               </button>
             )}
           </div> */}
+          {/* Contact Us Button */}
+          <div
+            className="desktop-nav"
+            style={{
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <Link
+              href="/contact"
+              style={{
+                padding: "10px 20px",
+                background: "#1A914B",
+                color: "#fff",
+                textDecoration: "none",
+                borderRadius: "8px",
+                fontSize: "14px",
+                fontWeight: "600",
+                fontFamily: "'Montserrat', sans-serif",
+                transition: "all 0.2s ease",
+                whiteSpace: "nowrap",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#157a3e";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#1A914B";
+              }}
+            >
+              Contact Us
+            </Link>
+          </div>
 
           {/* Mobile Hamburger */}
           <button
