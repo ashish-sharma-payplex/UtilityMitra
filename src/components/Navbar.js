@@ -581,10 +581,10 @@ export default function Navbar() {
               href="/contact"
               style={{
                 padding: "10px 20px",
-                background: "#1A914B",
+                background: "#032267",
                 color: "#fff",
                 textDecoration: "none",
-                borderRadius: "8px",
+                borderRadius: "25px",
                 fontSize: "14px",
                 fontWeight: "600",
                 fontFamily: "'Montserrat', sans-serif",
@@ -592,10 +592,10 @@ export default function Navbar() {
                 whiteSpace: "nowrap",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#157a3e";
+                e.currentTarget.style.background = "#032267";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#1A914B";
+                e.currentTarget.style.background = "#032267";
               }}
             >
               Contact Us

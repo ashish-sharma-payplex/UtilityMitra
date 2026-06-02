@@ -125,7 +125,7 @@ export default function Footer() {
 
       <div
         className="um-footer-root"
-        style={{ padding: "24px 32px 32px 32px" }}
+        style={{ padding: "24px 0px 32px 0px" }}
       >
         <footer className="um-footer-card">
           {/* ── Main Grid ── */}
