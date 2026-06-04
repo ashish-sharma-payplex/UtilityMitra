@@ -12,7 +12,7 @@ const quickLinks = [
 ];
 
 const navigationLinks = [
-  { label: "Support", href: "/support" },
+  { label: "Support", href: "#" },
   { label: "Privacy Policy", href: "/privacy" },
   { label: "Terms & Conditions", href: "/terms-conditions" },
   { label: "Refund Policy", href: "/refund" },

@@ -181,6 +181,9 @@ function MoreDropdown({ isOpen, onClose, currentSlug, pinnedSlugs, visibleRows }
   const ROW_H = 56;
   const { data: allServices, loading: servicesLoading } = useGetBbpsServices();
 
+
+
+  
   useEffect(() => {
     if (!isOpen) { setQuery(""); return; }
     const h = (e) => { if (e.key === "Escape") onClose(); };
@@ -552,7 +555,7 @@ export default function BillerPage({ slug }) {
   const billValidation = useBillValidation();
   const fetchBillHook = useFetchBill();
   const payBillHook = usePayBill();
-
+  
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 640);
     check();
@@ -576,6 +579,21 @@ export default function BillerPage({ slug }) {
     if (activeBillers.length > 0 && !selectedBiller && !isSearching)
       setSelectedBiller(activeBillers[0]);
   }, [activeBillers.length, isSearching]);
+
+useEffect(() => {
+  setSelectedBiller(null);
+  setFieldValues({});
+  setFieldErrors({});
+  setTouchedFields({});
+  setSubmitAttempted(false);
+  setOverrideAmount(null);
+  setPayloadSnapshot(null);
+  setFetchContactFields({ mobile: "", email: "" });
+  setFetchContactErrors({});
+  billValidation.reset();
+  fetchBillHook.reset();
+  payBillHook.reset();
+}, [slug]);
 
   // Reset form when biller changes
   useEffect(() => {
